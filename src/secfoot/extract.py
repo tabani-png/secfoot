@@ -47,6 +47,16 @@ UNITS = [
 ]
 BLANKS = {"", "-", "--", "—", "–", "n/a", "na", "nm", "*", "$", "%"}
 
+BOILERPLATE = re.compile(
+    r"^(table of contents"
+    r"|notes to (the )?consolidated financial statements.*"
+    r"|index( to financial statements)?"
+    r"|\d{1,3})$",
+    re.I,
+)
+TITLE_SEARCH_LIMIT = 60
+SECTION_TABLE_WINDOW = 15
+
 MAX_SECTION_BLOCKS = 20
 MAX_SECTION_CHARS = 6000
 HEADING_MAX_CHARS = 250
@@ -68,6 +78,7 @@ class Table:
     facts: list[Fact]
     source_url: str
     anchor: Optional[str] = None
+    skipped_rows: int = 0
 
 
 @dataclass(frozen=True)
@@ -144,71 +155,176 @@ def _units_near(node: Tag) -> str:
 
 
 def _title_near(node: Tag) -> str:
-    for previous in node.find_all_previous(BLOCK_TAGS, limit=15):
+    """The nearest real heading above a table, ignoring running page headers."""
+    previous_blocks = node.find_all_previous(BLOCK_TAGS, limit=TITLE_SEARCH_LIMIT)
+    for previous in previous_blocks:
         text = _text(previous)
-        if text and len(text) <= HEADING_MAX_CHARS and _is_heading(previous):
+        if not text or len(text) > HEADING_MAX_CHARS:
+            continue
+        if BOILERPLATE.match(text):
+            continue
+        if _is_heading(previous):
             return text
-    for previous in node.find_all_previous(BLOCK_TAGS, limit=15):
+    for previous in previous_blocks:
         text = _text(previous)
-        if text:
+        if text and not BOILERPLATE.match(text):
             return text[:HEADING_MAX_CHARS]
     return "(untitled table)"
 
 
-def _row_cells(row: Tag) -> list[str]:
-    return [_text(cell) for cell in row.find_all(["td", "th"], recursive=False)]
-
-
 YEAR = re.compile(r"^(19|20)\d{2}$")
-MONTHS = re.compile(
-    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)", re.I
-)
+MONTHS = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)", re.I)
 PERIOD_WORDS = re.compile(r"\b(fiscal|year|quarter|month|q[1-4]|as of|ended)\b", re.I)
+SPACERS = {"", "$", "%", "(", ")"}
 
 
 def looks_like_period(text: str) -> bool:
-    """Column headers such as '2025' are periods, not values."""
+    """Column headers such as '2025' or 'As of October 31' are periods, not values."""
     cleaned = (text or "").strip()
     if not cleaned:
         return False
-    return bool(YEAR.match(cleaned) or MONTHS.search(cleaned) or PERIOD_WORDS.search(cleaned))
+    return bool(
+        YEAR.match(cleaned) or MONTHS.search(cleaned) or PERIOD_WORDS.search(cleaned)
+    )
 
 
-def _split_header(rows: list[list[str]]):
-    """Find the row that names the periods, and return the data rows below it."""
+def _row_cells(row: Tag) -> list[tuple[str, int]]:
+    """Cell text with its colspan, so stacked headers can be lined up."""
+    cells = []
+    for cell in row.find_all(["td", "th"], recursive=False):
+        try:
+            span = max(1, int(cell.get("colspan", 1)))
+        except (TypeError, ValueError):
+            span = 1
+        cells.append((_text(cell), span))
+    return cells
+
+
+def _expand(cells: list[tuple[str, int]]) -> list[str]:
+    out = []
+    for text, span in cells:
+        out.extend([text] * span)
+    return out
+
+
+def _is_header_row(cells: list[tuple[str, int]]) -> bool:
+    tail = [c for c, _ in cells[1:] if c and c not in SPACERS]
+    if not tail:
+        return False
+    return all(parse_number(c) is None or looks_like_period(c) for c in tail)
+
+
+def _collapse(labels: list[str]) -> list[str]:
+    """Merge adjacent identical labels created by colspan padding."""
+    out: list[str] = []
+    for label in labels:
+        if not out or out[-1] != label:
+            out.append(label)
+    return out
+
+
+def _units_of(text: str) -> Optional[str]:
+    for pattern, label in UNITS:
+        if pattern.search(text):
+            return label
+    return None
+
+
+def _build_column_labels(header_rows: list[list[tuple[str, int]]]):
+    """Turn stacked header rows into one label per real data column.
+
+    Returns (labels, units). A tier that only states the units ("In millions")
+    is stripped out and reported separately. Columns that are blank in a tier
+    which most columns fill are spacer columns, and are dropped.
+    """
+    tiers = [_expand(row[1:]) for row in header_rows]
+    tiers = [tier for tier in tiers if tier]
+    if not tiers:
+        return [], None
+
+    units = None
+    kept_tiers = []
+    for tier in tiers:
+        texts = [c for c in tier if c]
+        found = next((_units_of(c) for c in texts if _units_of(c)), None)
+        if found and not any(looks_like_period(c) for c in texts):
+            units = units or found
+            continue
+        kept_tiers.append(tier)
+    if not kept_tiers:
+        return [], units
+
+    width = max(len(tier) for tier in kept_tiers)
+    padded = [tier + [""] * (width - len(tier)) for tier in kept_tiers]
+
+    keep = [True] * width
+    for tier in padded:
+        filled = sum(1 for c in tier if c and c not in SPACERS)
+        if filled * 2 <= width:      # a sparse tier is decoration, not structure
+            continue
+        for index, cell in enumerate(tier):
+            if not cell or cell in SPACERS:
+                keep[index] = False
+
+    composites = []
+    for index in range(width):
+        if not keep[index]:
+            continue
+        parts = []
+        for tier in padded:
+            piece = tier[index]
+            if piece and piece not in SPACERS and piece not in parts:
+                parts.append(piece)
+        if parts:
+            composites.append(", ".join(parts))
+    return _collapse(composites), units
+
+
+def _data_values(cells: list[tuple[str, int]]) -> list[str]:
+    """Drop currency and spacing cells but KEEP dashes: they hold a column."""
+    return [c for c, _ in cells[1:] if c not in SPACERS]
+
+
+def _split_header(rows: list[list[tuple[str, int]]]):
+    """Consume every stacked header row, then return the data rows below."""
+    header_rows: list[list[tuple[str, int]]] = []
     for index, cells in enumerate(rows):
-        tail = [c for c in cells[1:] if c and c not in BLANKS]
-        if not tail:
+        if _is_header_row(cells):
+            header_rows.append(cells)
             continue
-        if all(parse_number(c) is None or looks_like_period(c) for c in tail):
-            return tail, rows[index + 1:]
-    return [], rows
+        if header_rows:
+            labels, units = _build_column_labels(header_rows)
+            return labels, units, rows[index:]
+    return [], None, []
 
 
-def extract_tables(html: str, source_url: str) -> list[Table]:
-    tables: list[Table] = []
-    for node in _soup(html).find_all("table"):
+def _table_from_node(node: Tag, source_url: str) -> Optional[Table]:
         rows = [_row_cells(r) for r in node.find_all("tr")]
-        rows = [r for r in rows if any(c for c in r)]
+        rows = [r for r in rows if any(c for c, _ in r)]
         if not rows:
-            continue
-        column_labels, body = _split_header(rows)
+            return None
+        column_labels, header_units, body = _split_header(rows)
         if not column_labels or not body:
-            continue
+            return None
         title = _title_near(node)
-        units = _units_near(node)
+        units = header_units or _units_near(node)
         anchor = _nearest_anchor(node)
         facts: list[Fact] = []
+        skipped = 0
         for cells in body:
             if not cells:
                 continue
-            row_label = cells[0]
+            row_label = cells[0][0]
             if not row_label:
                 continue
-            values = [
-                c for c in cells[1:]
-                if c and c not in BLANKS and parse_number(c) is not None
-            ]
+            values = _data_values(cells)
+            if not values:
+                continue
+            if len(values) != len(column_labels):
+                # A number placed under the wrong period is worse than no
+                # number at all, so an unalignable row is dropped and counted.
+                skipped += 1
+                continue
             for column_label, raw in zip(column_labels, values):
                 facts.append(
                     Fact(
@@ -226,18 +342,27 @@ def extract_tables(html: str, source_url: str) -> list[Table]:
                     )
                 )
         if not facts:
-            continue
-        tables.append(
-            Table(
-                title=title,
-                units=units,
-                column_labels=column_labels,
-                facts=facts,
-                source_url=source_url,
-                anchor=anchor,
-            )
+            return None
+        return Table(
+            title=title,
+            units=units,
+            column_labels=column_labels,
+            facts=facts,
+            source_url=source_url,
+            anchor=anchor,
+            skipped_rows=skipped,
         )
-    return tables
+
+
+def extract_tables(html: str, source_url: str) -> list[Table]:
+    return [
+        table
+        for table in (
+            _table_from_node(node, source_url)
+            for node in _soup(html).find_all("table")
+        )
+        if table is not None
+    ]
 
 
 def _patterns(topic: str) -> list[re.Pattern]:
@@ -296,6 +421,51 @@ def find_sections(html: str, topic: str, source_url: str = "") -> list[Section]:
     return sections
 
 
+def _tables_under_matched_headings(soup, patterns, source_url) -> list[Table]:
+    """Tables that sit between a heading naming the topic and the next heading.
+
+    A rollforward table often names the topic nowhere inside itself; the only
+    thing identifying it is the footnote heading above it.
+    """
+    ordered = []
+    for node in soup.find_all(BLOCK_TAGS + ("table",)):
+        if node.name == "table":
+            ordered.append(("table", node))
+            continue
+        if node.find(BLOCK_TAGS) is not None or not _text(node):
+            continue
+        ordered.append(("heading" if _is_heading(node) else "block", node))
+
+    starts = [
+        index for index, (kind, node) in enumerate(ordered)
+        if kind != "table"
+        and len(_text(node)) <= HEADING_MAX_CHARS
+        and not BOILERPLATE.match(_text(node))
+        and any(pattern.search(_text(node)) for pattern in patterns)
+    ]
+    styled = [i for i in starts if ordered[i][0] == "heading"]
+    # Many filers style footnote headings with a CSS class the parser cannot
+    # see, so fall back to any short block naming the topic.
+    starts = styled or starts
+
+    tables: list[Table] = []
+    seen_nodes: set[int] = set()
+    for start in starts:
+        for index in range(start + 1, min(start + 1 + SECTION_TABLE_WINDOW, len(ordered))):
+            kind, node = ordered[index]
+            if kind == "heading":
+                break
+            if kind != "table":
+                continue
+            if id(node) in seen_nodes:
+                continue
+            seen_nodes.add(id(node))
+            table = _table_from_node(node, source_url)
+            if table is not None:
+                tables.append(table)
+    return tables
+
+
 def extract_topic(html: str, topic: str, source_url: str) -> TopicResult:
     patterns = _patterns(topic)
     sections = find_sections(html, topic, source_url)
@@ -311,7 +481,22 @@ def extract_topic(html: str, topic: str, source_url: str) -> TopicResult:
         labels = {f.provenance.row_label or "" for f in table.facts}
         return any(p.search(label) for label in labels for p in patterns)
 
-    tables = [t for t in extract_tables(html, source_url) if table_matches(t)]
+    soup = _soup(html)
+    tables = [
+        table
+        for table in (
+            _table_from_node(node, source_url) for node in soup.find_all("table")
+        )
+        if table is not None and table_matches(table)
+    ]
+    seen = {(t.title, t.column_labels and t.column_labels[0],
+             t.facts[0].provenance.row_label) for t in tables}
+    for table in _tables_under_matched_headings(soup, patterns, source_url):
+        key = (table.title, table.column_labels and table.column_labels[0],
+               table.facts[0].provenance.row_label)
+        if key not in seen and any(looks_like_period(c) for c in table.column_labels):
+            seen.add(key)
+            tables.append(table)
     facts = [f for t in tables for f in t.facts]
     status = "found" if (sections or tables) else NOT_FOUND
     return TopicResult(
