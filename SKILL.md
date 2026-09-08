@@ -34,7 +34,25 @@ cd /Users/tabani/builds/sec-footnote-extractor
 ```
 
 Flags: `--ticker` or `--cik`, `--topic`, `--form` (default `10-K`),
-`--index` (0 = newest), `--user-agent` (required), `--cache`.
+`--index` (0 = newest), `--route`, `--user-agent` (required), `--cache`.
+
+### Routes — use `reports` unless you have a reason not to
+
+`--route reports` (the default under `auto`) reads the filing's own
+FilingSummary.xml and fetches only the two or three small pre-rendered reports
+that answer the topic. `--route document` downloads the whole filed document.
+
+Measured over 13 large filers: 8.4 MB read via reports versus 49.6 MB via the
+document, with 13/13 cash figures agreeing with XBRL. The document route got
+IBM wrong (its balance sheet is not in the primary document at all) and
+Caterpillar wrong (a ragged header shifted every segment label).
+
+A report's ShortName IS the footnote's name, so provenance never depends on
+guessing which heading sat above a table.
+
+Do NOT put a headless browser (Cloudflare, Playwright) in front of this. SEC
+filings are static HTML with no JavaScript; a browser adds cost and latency for
+no gain. Use a browser only to spot-check results by eye.
 
 Topics: `cash_and_equivalents`, `foreign_currency`, `derivatives`,
 `supply_chain_finance`, `pensions`.

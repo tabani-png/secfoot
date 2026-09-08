@@ -41,9 +41,9 @@ BLOCK_TAGS = ("p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li")
 HEADING_TAGS = ("b", "strong", "h1", "h2", "h3", "h4", "h5", "h6")
 BOLD_STYLE = re.compile(r"font-weight\s*:\s*(bold|[6-9]00)", re.I)
 UNITS = [
-    (re.compile(r"in\s+billions", re.I), "billions"),
-    (re.compile(r"in\s+millions", re.I), "millions"),
-    (re.compile(r"in\s+thousands", re.I), "thousands"),
+    (re.compile(r"\bbillions\b", re.I), "billions"),
+    (re.compile(r"\bmillions\b", re.I), "millions"),
+    (re.compile(r"\bthousands\b", re.I), "thousands"),
 ]
 BLANKS = {"", "-", "--", "—", "–", "n/a", "na", "nm", "*", "$", "%"}
 
@@ -243,6 +243,9 @@ def _build_column_labels(header_rows: list[list[tuple[str, int]]]):
         return [], None
 
     units = None
+    for row in header_rows:                    # the stub cell, e.g. "(Amounts in millions)"
+        if row and not units:
+            units = _units_of(row[0][0])
     kept_tiers = []
     for tier in tiers:
         texts = [c for c in tier if c]
@@ -260,7 +263,7 @@ def _build_column_labels(header_rows: list[list[tuple[str, int]]]):
     keep = [True] * width
     for tier in padded:
         filled = sum(1 for c in tier if c and c not in SPACERS)
-        if filled * 2 <= width:      # a sparse tier is decoration, not structure
+        if filled * 3 <= width:      # a sparse tier is decoration, not structure
             continue
         for index, cell in enumerate(tier):
             if not cell or cell in SPACERS:
@@ -272,7 +275,7 @@ def _build_column_labels(header_rows: list[list[tuple[str, int]]]):
             continue
         parts = []
         for tier in padded:
-            piece = tier[index]
+            piece = tier[index].rstrip(" ,;:")
             if piece and piece not in SPACERS and piece not in parts:
                 parts.append(piece)
         if parts:
