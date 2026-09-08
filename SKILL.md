@@ -60,6 +60,29 @@ Topics: `cash_and_equivalents`, `foreign_currency`, `derivatives`,
 Output is JSON: company, cik, form, report_date, filing_date, source_url,
 topic, status, sections, facts. Every fact carries a `provenance` block.
 
+## The deliverable: a benchmark table
+
+```bash
+cd /Users/tabani/builds/sec-footnote-extractor
+.venv/bin/python -m secfoot.benchmark_cli \
+  --tickers HPQ,CAT,BA,PG,KO \
+  --user-agent "Jeanmartin research muhammad.a@jeanmartin.com"
+```
+
+One row per metric, one column per company, every number footnoted to its
+report URL, table name and row label. `--format json` for the raw rows.
+
+Three outcomes per cell, and only three:
+
+- a number, with the prior year in brackets
+- `not found` - the filing does not disclose it. Never substitute anything.
+- `ambiguous` - the filing splits that line across plans or segments with no
+  total. The value is withheld and every column is listed under Sources.
+  Reporting one plan's number as the company's figure is the failure this
+  prevents.
+
+A `⚠` on a number means the year-on-year move exceeds 10x. Check it.
+
 ## The pipeline
 
 1. **CIK** — `edgar.ticker_to_cik` via `company_tickers.json`, padded to 10 digits.

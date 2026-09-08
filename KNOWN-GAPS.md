@@ -35,3 +35,13 @@ fetched when name matching finds no report.
 
 Use `--route auto` (the default). `--route document` is kept as a fallback and
 is known to be worse.
+
+## Dimension names on report pages
+
+A report page repeats one period header above every plan or segment, and puts
+the plan name in a section marker row (`Pension Benefits [Member]`) that the
+extractor does not yet capture. So an ambiguous breakdown identifies its
+columns positionally (`Dec. 31, 2025 [2]`) rather than by plan name.
+
+The numbers are right and the ambiguity is correctly declared; only the label
+is missing. Capturing those marker rows is the next improvement.
