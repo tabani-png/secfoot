@@ -15,6 +15,9 @@ class Provenance:
     period: Optional[str]
     units: Optional[str]
     raw_text: str
+    # the plan or segment a report page names in a marker row above the number;
+    # None means the figure is undimensioned, i.e. the total
+    dimension: Optional[str] = None
 
     def as_dict(self) -> dict:
         return asdict(self)

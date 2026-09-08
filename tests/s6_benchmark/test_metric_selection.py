@@ -199,3 +199,49 @@ def test_the_same_number_repeated_is_not_ambiguous():
     row = benchmark.pick(REPEATED_SAME_VALUE, "cash_and_equivalents")
     assert row.status == "found"
     assert row.value == 3690.0
+
+
+def dim_fact(value, row, column, title, dimension, units="millions"):
+    return Fact(value=value, provenance=Provenance(
+        source_url=SOURCE, anchor=None, table_title=title, row_label=row,
+        column_label=column, period=column, units=units, raw_text=str(value),
+        dimension=dimension))
+
+
+PLANS = [
+    dim_fact(0.0, "Service cost", "Dec. 31, 2025", "Pension (Details)", "U.S. Pension Benefits"),
+    dim_fact(49.0, "Service cost", "Dec. 31, 2025", "Pension (Details)", "Non-U.S. Pension Benefits"),
+    dim_fact(63.0, "Service cost", "Dec. 31, 2025", "Pension (Details)", "Other Postretirement"),
+]
+
+
+def test_the_breakdown_is_keyed_by_plan_name_when_the_filing_gives_one():
+    row = benchmark.pick(PLANS, "pension_service_cost")
+    assert row.status == "ambiguous"
+    assert row.breakdown == {
+        "U.S. Pension Benefits": 0.0,
+        "Non-U.S. Pension Benefits": 49.0,
+        "Other Postretirement": 63.0,
+    }
+
+
+def test_the_flag_lists_the_plans_by_name():
+    row = benchmark.pick(PLANS, "pension_service_cost")
+    assert "Non-U.S. Pension Benefits" in row.flags[0]
+
+
+WITH_TOTAL = PLANS + [
+    dim_fact(112.0, "Service cost", "Dec. 31, 2025", "Pension (Details)", None),
+    dim_fact(108.0, "Service cost", "Dec. 31, 2024", "Pension (Details)", None),
+]
+
+
+def test_an_undimensioned_figure_is_the_total_and_wins():
+    row = benchmark.pick(WITH_TOTAL, "pension_service_cost")
+    assert row.status == "found"
+    assert row.value == 112.0
+    assert row.prior_value == 108.0
+
+
+def test_the_chosen_total_records_that_it_covers_all_plans():
+    assert benchmark.pick(WITH_TOTAL, "pension_service_cost").dimension is None

@@ -67,6 +67,8 @@ class Row:
     flags: list[str] = field(default_factory=list)
     # when a line is split across plans or segments, every column and its value
     breakdown: dict[str, float] = field(default_factory=dict)
+    # the plan or segment this number covers; None means it is the total
+    dimension: Optional[str] = None
 
 
 def period_year(label: str) -> Optional[int]:
@@ -120,6 +122,11 @@ def pick(facts: list[Fact], metric_name: str) -> Row:
                     for f in candidates_for_year}
         if len(distinct) == 1:
             return candidates_for_year[0]
+        # A figure the filing states without naming a plan or segment is the
+        # total, so it stands for the metric.
+        totals = [f for f in candidates_for_year if f.provenance.dimension is None]
+        if len({round(f.value * SCALE[f.provenance.units], 4) for f in totals}) == 1:
+            return totals[0]
         totals = [f for f in candidates_for_year
                   if TOTAL_COLUMN.search(f.provenance.column_label or "")]
         return totals[0] if len(totals) == 1 else None
@@ -131,13 +138,13 @@ def pick(facts: list[Fact], metric_name: str) -> Row:
         # identical labels must not collapse onto each other.
         breakdown: dict[str, float] = {}
         for f in by_year[years[0]]:
-            key = f.provenance.column_label
+            key = f.provenance.dimension or f.provenance.column_label
             if key in breakdown:
                 key = f"{key} [{len([k for k in breakdown if k.startswith(key)]) + 1}]"
             breakdown[key] = f.value * SCALE[f.provenance.units]
         columns = sorted(breakdown)
-        distinct_labels = {f.provenance.column_label for f in by_year[years[0]]}
-        reason = ("no total" if len(distinct_labels) > 1
+        named = any(f.provenance.dimension for f in by_year[years[0]])
+        reason = ("no total" if named
                   else "columns not labelled apart in the filing")
         return Row(
             metric=metric_name, label=metric.label, value=None, units=None,
@@ -163,7 +170,8 @@ def pick(facts: list[Fact], metric_name: str) -> Row:
         prior_period=prior.provenance.period if prior else None,
         row_label=current.provenance.row_label,
         table_title=current.provenance.table_title,
-        source_url=current.provenance.source_url, status="found", flags=flags)
+        source_url=current.provenance.source_url, status="found", flags=flags,
+        dimension=current.provenance.dimension)
 
 
 def _cell(row: Row) -> str:

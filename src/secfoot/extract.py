@@ -57,6 +57,24 @@ BOILERPLATE = re.compile(
 TITLE_SEARCH_LIMIT = 60
 SECTION_TABLE_WINDOW = 15
 
+# A report page names a plan or segment in a marker row: a label carrying the
+# XBRL axis and member separated by a pipe, with no values beside it.
+DIMENSION_MARKER = re.compile(r"^(?P<axis>.+?)\s*\|\s*(?P<member>[^|]+)$")
+# The renderer marks a dimension row <tr class="rh">; sub-headings get ro/re.
+DIMENSION_ROW_CLASS = "rh"
+
+
+def _member_of(label: str) -> str:
+    """The plan or segment name, keeping every part of the marker.
+
+    Which side of the pipe names the plan is not fixed: Caterpillar writes
+    "Pension Plan | U.S. Pension Benefits" and HP writes
+    "U.S. | Defined Benefit Plans", so dropping either side collapses two
+    distinct plans into one name.
+    """
+    parts = [part.strip() for part in label.split("|") if part.strip()]
+    return ", ".join(parts) if parts else label.strip()
+
 MAX_SECTION_BLOCKS = 20
 MAX_SECTION_CHARS = 6000
 HEADING_MAX_CHARS = 250
@@ -338,8 +356,14 @@ def _split_header(rows, table_has_th: bool = False):
 
 
 def _table_from_node(node: Tag, source_url: str) -> Optional[Table]:
-        rows = [_row_cells(r) for r in node.find_all("tr")]
-        rows = [r for r in rows if any(c for c, _, _ in r)]
+        pairs = [
+            (_row_cells(tr), DIMENSION_ROW_CLASS in (tr.get("class") or []))
+            for tr in node.find_all("tr")
+        ]
+        pairs = [(cells, is_marker) for cells, is_marker in pairs
+                 if any(c for c, _, _ in cells)]
+        rows = [cells for cells, _ in pairs]
+        marker_rows = {id(cells) for cells, is_marker in pairs if is_marker}
         if not rows:
             return None
         table_has_th = any(is_th for row in rows for _, _, is_th in row)
@@ -351,14 +375,22 @@ def _table_from_node(node: Tag, source_url: str) -> Optional[Table]:
         anchor = _nearest_anchor(node)
         facts: list[Fact] = []
         skipped = 0
+        dimension = None
         for cells in body:
             if not cells:
                 continue
             row_label = cells[0][0]
             if not row_label:
                 continue
+            if id(cells) in marker_rows:
+                dimension = _member_of(row_label)
+                continue
             values = _data_values(cells)
             if not values:
+                # Without a row class to go on, only the axis|member shape
+                # distinguishes a dimension row from a plain sub-heading.
+                if not marker_rows and DIMENSION_MARKER.match(row_label):
+                    dimension = _member_of(row_label)
                 continue
             if len(values) != len(column_labels):
                 # A number placed under the wrong period is worse than no
@@ -378,6 +410,7 @@ def _table_from_node(node: Tag, source_url: str) -> Optional[Table]:
                             period=column_label,
                             units=units,
                             raw_text=raw,
+                            dimension=dimension,
                         ),
                     )
                 )

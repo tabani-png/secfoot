@@ -36,12 +36,26 @@ fetched when name matching finds no report.
 Use `--route auto` (the default). `--route document` is kept as a fallback and
 is known to be worse.
 
-## Dimension names on report pages
+## Dimension names on report pages — resolved
 
-A report page repeats one period header above every plan or segment, and puts
-the plan name in a section marker row (`Pension Benefits [Member]`) that the
-extractor does not yet capture. So an ambiguous breakdown identifies its
-columns positionally (`Dec. 31, 2025 [2]`) rather than by plan name.
+A report page repeats one period header above every plan, and names the plan in
+a marker row instead. Those rows are now captured, so a split line is broken
+down by plan name:
 
-The numbers are right and the ambiguity is correctly declared; only the label
-is missing. Capturing those marker rows is the next improvement.
+    Pension service cost (HPQ)
+      Non-U.S., Defined Benefit Plans: 39
+      U.S., Defined Benefit Plans: 0
+      Post-Retirement Benefit Plans: 1
+
+Three things made this harder than it looks, each pinned by a test:
+
+- A marker row is identified by `<tr class="rh">`, not by its text. HP's
+  "Post-Retirement Benefit Plans" carries no pipe and reads exactly like the
+  sub-heading "Net benefit (credit) cost" above it.
+- Which side of the pipe names the plan is not fixed. Caterpillar writes
+  "Pension Plan | U.S. Pension Benefits"; HP writes "U.S. | Defined Benefit
+  Plans". Keeping either side alone merged HP's two plans into one name, so
+  both sides are kept.
+- A figure stated above every marker row is undimensioned, and only then is it
+  treated as the company total. Before marker rows were captured, HP's
+  post-retirement service cost of 1 was being reported as HP's total.
