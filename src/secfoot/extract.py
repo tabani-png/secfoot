@@ -188,27 +188,33 @@ def looks_like_period(text: str) -> bool:
     )
 
 
-def _row_cells(row: Tag) -> list[tuple[str, int]]:
-    """Cell text with its colspan, so stacked headers can be lined up."""
+def _row_cells(row: Tag) -> list[tuple[str, int, bool]]:
+    """Cell text, its colspan, and whether it is a <th>.
+
+    A filing's rendered report pages mark header rows with <th>, which is far
+    more reliable than guessing from whether the cells hold numbers.
+    """
     cells = []
     for cell in row.find_all(["td", "th"], recursive=False):
         try:
             span = max(1, int(cell.get("colspan", 1)))
         except (TypeError, ValueError):
             span = 1
-        cells.append((_text(cell), span))
+        cells.append((_text(cell), span, cell.name == "th"))
     return cells
 
 
-def _expand(cells: list[tuple[str, int]]) -> list[str]:
+def _expand(cells) -> list[str]:
     out = []
-    for text, span in cells:
+    for text, span, _ in cells:
         out.extend([text] * span)
     return out
 
 
-def _is_header_row(cells: list[tuple[str, int]]) -> bool:
-    tail = [c for c, _ in cells[1:] if c and c not in SPACERS]
+def _is_header_row(cells, table_has_th: bool) -> bool:
+    if table_has_th:
+        return bool(cells) and all(is_th for _, _, is_th in cells)
+    tail = [c for c, _, _ in cells[1:] if c and c not in SPACERS]
     if not tail:
         return False
     return all(parse_number(c) is None or looks_like_period(c) for c in tail)
@@ -230,47 +236,76 @@ def _units_of(text: str) -> Optional[str]:
     return None
 
 
-def _build_column_labels(header_rows: list[list[tuple[str, int]]]):
+def _data_width(body) -> int:
+    """How many value columns the data rows actually use."""
+    counts = {}
+    for cells in body:
+        if not cells or not cells[0][0]:
+            continue
+        n = len([c for c, _, _ in cells[1:] if c not in SPACERS])
+        if n:
+            counts[n] = counts.get(n, 0) + 1
+    if not counts:
+        return 0
+    return max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
+
+
+def _tier(header_row, width: int) -> list[str] | None:
+    """Line one header row up with the data columns.
+
+    Most header rows lead with a stub cell above the row labels, but a report
+    page's period row omits it, so the stub is detected by width rather than
+    assumed.
+    """
+    full = _expand(header_row)
+    if width and len(full) == width:
+        return full
+    without_stub = _expand(header_row[1:])
+    if width and len(without_stub) == width:
+        return without_stub
+    return without_stub or None
+
+
+def _build_column_labels(header_rows, width: int):
     """Turn stacked header rows into one label per real data column.
 
-    Returns (labels, units). A tier that only states the units ("In millions")
-    is stripped out and reported separately. Columns that are blank in a tier
-    which most columns fill are spacer columns, and are dropped.
+    Returns (labels, units). A tier that only states the units is stripped out
+    and reported separately. Columns that are blank in a tier which most
+    columns fill are spacer columns, and are dropped.
     """
-    tiers = [_expand(row[1:]) for row in header_rows]
-    tiers = [tier for tier in tiers if tier]
-    if not tiers:
-        return [], None
-
     units = None
-    for row in header_rows:                    # the stub cell, e.g. "(Amounts in millions)"
+    for row in header_rows:
         if row and not units:
             units = _units_of(row[0][0])
-    kept_tiers = []
-    for tier in tiers:
+
+    tiers = []
+    for row in header_rows:
+        tier = _tier(row, width)
+        if not tier:
+            continue
         texts = [c for c in tier if c]
         found = next((_units_of(c) for c in texts if _units_of(c)), None)
         if found and not any(looks_like_period(c) for c in texts):
             units = units or found
             continue
-        kept_tiers.append(tier)
-    if not kept_tiers:
+        tiers.append(tier)
+    if not tiers:
         return [], units
 
-    width = max(len(tier) for tier in kept_tiers)
-    padded = [tier + [""] * (width - len(tier)) for tier in kept_tiers]
+    span = max(len(tier) for tier in tiers)
+    padded = [tier + [""] * (span - len(tier)) for tier in tiers]
 
-    keep = [True] * width
+    keep = [True] * span
     for tier in padded:
         filled = sum(1 for c in tier if c and c not in SPACERS)
-        if filled * 3 <= width:      # a sparse tier is decoration, not structure
+        if filled * 3 <= span:       # a sparse tier is decoration, not structure
             continue
         for index, cell in enumerate(tier):
             if not cell or cell in SPACERS:
                 keep[index] = False
 
     composites = []
-    for index in range(width):
+    for index in range(span):
         if not keep[index]:
             continue
         parts = []
@@ -283,30 +318,32 @@ def _build_column_labels(header_rows: list[list[tuple[str, int]]]):
     return _collapse(composites), units
 
 
-def _data_values(cells: list[tuple[str, int]]) -> list[str]:
+def _data_values(cells) -> list[str]:
     """Drop currency and spacing cells but KEEP dashes: they hold a column."""
-    return [c for c, _ in cells[1:] if c not in SPACERS]
+    return [c for c, _, _ in cells[1:] if c not in SPACERS]
 
 
-def _split_header(rows: list[list[tuple[str, int]]]):
+def _split_header(rows, table_has_th: bool = False):
     """Consume every stacked header row, then return the data rows below."""
-    header_rows: list[list[tuple[str, int]]] = []
+    header_rows = []
     for index, cells in enumerate(rows):
-        if _is_header_row(cells):
+        if _is_header_row(cells, table_has_th):
             header_rows.append(cells)
             continue
         if header_rows:
-            labels, units = _build_column_labels(header_rows)
-            return labels, units, rows[index:]
+            body = rows[index:]
+            labels, units = _build_column_labels(header_rows, _data_width(body))
+            return labels, units, body
     return [], None, []
 
 
 def _table_from_node(node: Tag, source_url: str) -> Optional[Table]:
         rows = [_row_cells(r) for r in node.find_all("tr")]
-        rows = [r for r in rows if any(c for c, _ in r)]
+        rows = [r for r in rows if any(c for c, _, _ in r)]
         if not rows:
             return None
-        column_labels, header_units, body = _split_header(rows)
+        table_has_th = any(is_th for row in rows for _, _, is_th in row)
+        column_labels, header_units, body = _split_header(rows, table_has_th)
         if not column_labels or not body:
             return None
         title = _title_near(node)

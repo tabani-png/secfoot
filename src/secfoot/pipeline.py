@@ -44,7 +44,12 @@ def answer(ticker_or_cik, topic: str, fetcher, form: str = "10-K",
 
     if route in ("auto", "reports"):
         result = _from_reports(cik, filing, topic, fetcher)
-        if result is not None and (route == "reports" or result[0]):
+        # A list of value-less facts is still truthy, so ask for a real number
+        # before deciding the reports route answered the question.
+        answered = result is not None and (
+            any(f.value is not None for f in result[0]) or result[1]
+        )
+        if result is not None and (route == "reports" or answered):
             facts, sections, read, urls = result
             return Answer(**base, route="reports",
                           status="found" if (facts or sections) else NOT_FOUND,
