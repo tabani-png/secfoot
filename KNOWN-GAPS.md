@@ -59,3 +59,23 @@ Three things made this harder than it looks, each pinned by a test:
 - A figure stated above every marker row is undimensioned, and only then is it
   treated as the company total. Before marker rows were captured, HP's
   post-retirement service cost of 1 was being reported as HP's total.
+
+## Foreign filers (20-F, IFRS)
+
+Checked against the latest 20-F of TM, UL, SAP, NVS, SHEL. All five cash
+figures agree with the filing: UL, SAP, NVS and SHEL match the XBRL
+`ifrs-full` tag; Toyota's prior year matches it exactly and its current year is
+not in companyfacts yet, so it was checked against the filed balance sheet
+itself (¥12,659,622 / ¥8,982,404).
+
+**Currency is now carried on every figure.** A foreign filer does not report in
+dollars, and a table mixing currencies says so and refuses to imply otherwise.
+Convert before benchmarking; the tool will not convert for you.
+
+Open:
+
+- Unilever returns `not found` for every pension line. Its report names and row
+  labels differ again from SAP's; not yet investigated.
+- No 20-F filer returns a supply chain finance figure. Not yet established
+  whether they disclose one.
+- 10-Q is untested.

@@ -59,3 +59,34 @@ def test_an_ambiguous_row_prints_each_column_with_its_number():
 
 def test_an_ambiguous_row_still_shows_its_source_url():
     assert "https://www.sec.gov/x/R90.htm" in benchmark.render_markdown(_ambiguous())
+
+
+def _mixed():
+    def row(metric, value, currency):
+        return Row(metric=metric, label=benchmark.METRICS[metric].label, value=value,
+                   units="millions", period="Dec 31 2025", prior_value=None,
+                   prior_period=None, row_label="Cash and cash equivalents",
+                   table_title="Balance sheet", source_url="https://www.sec.gov/x/R8.htm",
+                   status="found", flags=[], currency=currency)
+    return {"HPQ": [row("cash_and_equivalents", 3705.0, "USD")],
+            "UL": [row("cash_and_equivalents", 3941.0, "EUR")]}
+
+
+def test_a_euro_filer_is_never_printed_as_dollars():
+    text = benchmark.render_markdown(_mixed())
+    assert "€3,941" in text or "3,941 EUR" in text
+
+
+def test_the_footer_never_claims_one_currency_for_a_mixed_table():
+    text = benchmark.render_markdown(_mixed())
+    assert "All figures in $ millions" not in text
+
+
+def test_a_mixed_currency_table_warns_that_figures_are_not_comparable():
+    text = benchmark.render_markdown(_mixed())
+    assert "not directly comparable" in text.lower()
+
+
+def test_a_single_currency_table_states_that_currency_plainly():
+    only_usd = {"HPQ": _mixed()["HPQ"]}
+    assert "USD millions" in benchmark.render_markdown(only_usd)

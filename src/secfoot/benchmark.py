@@ -38,13 +38,22 @@ METRICS: dict[str, Metric] = {
     "supplier_finance_confirmed": Metric(
         "Invoices confirmed in year", "supply_chain_finance",
         (r"invoices confirmed",)),
+    # IFRS filers write "Current service cost"; US filers write "Service cost".
     "pension_service_cost": Metric(
-        "Pension service cost", "pensions", (r"^service cost$",)),
+        "Pension service cost", "pensions",
+        (r"^(current )?service cost$",)),
     "pension_interest_cost": Metric(
         "Pension interest cost", "pensions", (r"^interest cost$",)),
     "pension_benefit_obligation": Metric(
         "Benefit obligation, end of year", "pensions",
-        (r"benefit obligation.*end of (the )?year", r"^benefit obligation$")),
+        (r"^benefit obligation.*end of (the )?year$",
+         r"^benefit obligation$",
+         r"^present value of the (defined benefit obligation|dbo)$",
+         r"^defined benefit obligation$")),
+    "pension_plan_assets": Metric(
+        "Fair value of plan assets", "pensions",
+        (r"^fair value of (the )?plan assets$",
+         r"^plan assets.*end of (the )?year$")),
     "derivative_notional": Metric(
         "Derivative notional amount", "derivatives",
         (r"^notional amount", r"total notional")),
@@ -69,6 +78,8 @@ class Row:
     breakdown: dict[str, float] = field(default_factory=dict)
     # the plan or segment this number covers; None means it is the total
     dimension: Optional[str] = None
+    # the reporting currency of this figure; never assume dollars
+    currency: Optional[str] = None
 
 
 def period_year(label: str) -> Optional[int]:
@@ -151,6 +162,7 @@ def pick(facts: list[Fact], metric_name: str) -> Row:
             period=None, prior_value=None, prior_period=None,
             row_label=sample.row_label, table_title=sample.table_title,
             source_url=sample.source_url, status=AMBIGUOUS,
+            currency=sample.currency,
             flags=[f"{len(columns)} columns for {years[0]}, {reason}: "
                    + "; ".join(columns)],
             breakdown=breakdown)
@@ -171,7 +183,18 @@ def pick(facts: list[Fact], metric_name: str) -> Row:
         row_label=current.provenance.row_label,
         table_title=current.provenance.table_title,
         source_url=current.provenance.source_url, status="found", flags=flags,
-        dimension=current.provenance.dimension)
+        dimension=current.provenance.dimension,
+        currency=current.provenance.currency)
+
+
+SYMBOLS = {"USD": "$", "EUR": "\u20ac", "JPY": "\u00a5", "GBP": "\u00a3"}
+
+
+def _money(value: float, currency: Optional[str]) -> str:
+    prefix = SYMBOLS.get(currency or "", "")
+    if not prefix and currency:
+        return f"{value:,.0f} {currency}"
+    return f"{prefix}{value:,.0f}"
 
 
 def _cell(row: Row) -> str:
@@ -179,9 +202,9 @@ def _cell(row: Row) -> str:
         return "ambiguous ⚠"
     if row.status != "found" or row.value is None:
         return NOT_FOUND
-    text = f"{row.value:,.0f}"
+    text = _money(row.value, row.currency)
     if row.prior_value is not None:
-        text += f" ({row.prior_value:,.0f})"
+        text += f" ({_money(row.prior_value, row.currency)})"
     if row.flags:
         text += " ⚠"
     return text
@@ -204,7 +227,19 @@ def render_markdown(by_company: dict[str, list[Row]]) -> str:
         label = METRICS[metric_name].label
         lines.append(f"| {label} | " + " | ".join(cells) + " |")
 
-    lines += ["", "All figures in $ millions. Current year, prior year in brackets.",
+    currencies = sorted({r.currency for rows in by_company.values()
+                         for r in rows if r.currency})
+    if len(currencies) == 1:
+        money_note = f"All figures in {currencies[0]} millions."
+    elif currencies:
+        money_note = ("Figures are in each filer's own reporting currency ("
+                      + ", ".join(currencies)
+                      + "), so they are NOT directly comparable. Convert before "
+                        "benchmarking.")
+    else:
+        money_note = "Figures in millions; the filings did not state a currency."
+
+    lines += ["", money_note + " Current year, prior year in brackets.",
               "⚠ on a number marks a year-on-year move over 10x: check it before using it.",
               "\"ambiguous\" means the filing splits that line across plans or segments "
               "with no total; the columns are listed under Sources.", "",

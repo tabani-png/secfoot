@@ -45,6 +45,19 @@ UNITS = [
     (re.compile(r"\bmillions\b", re.I), "millions"),
     (re.compile(r"\bthousands\b", re.I), "thousands"),
 ]
+# Symbols and codes a filer may write beside a figure. Stripping only "$"
+# left every foreign figure unparseable.
+MONEY_PREFIX = re.compile(
+    r"^[\s\u20ac\u00a5\u00a3$\u20b9\u20a9R]*"
+    r"(?:USD|EUR|JPY|GBP|CHF|CAD|AUD|CNY|SEK|DKK|NOK|BRL|INR|KRW|HKD|SGD|MXN|ZAR)?\s*",
+    re.I,
+)
+# A cell holding only a footnote reference is a marker, not a value.
+FOOTNOTE_MARKER = re.compile(r"^\[[0-9a-z]{1,3}\]$", re.I)
+
+CURRENCY_CODE = re.compile(r"\b(USD|EUR|JPY|GBP|CHF|CAD|AUD|CNY|SEK|DKK|NOK|BRL|INR|KRW|HKD|SGD|MXN|ZAR)\b")
+CURRENCY_SYMBOL = [("$", "USD"), ("\u20ac", "EUR"), ("\u00a5", "JPY"), ("\u00a3", "GBP")]
+
 BLANKS = {"", "-", "--", "—", "–", "n/a", "na", "nm", "*", "$", "%"}
 
 BOILERPLATE = re.compile(
@@ -92,6 +105,7 @@ class Section:
 class Table:
     title: str
     units: str
+    currency: Optional[str]
     column_labels: list[str]
     facts: list[Fact]
     source_url: str
@@ -114,10 +128,14 @@ def parse_number(text: str):
     if text is None:
         return None
     cleaned = str(text).strip()
-    if cleaned.lower() in BLANKS:
+    if cleaned.lower() in BLANKS or FOOTNOTE_MARKER.match(cleaned):
         return None
-    # Strip currency and spacing first, so "$ (1,234)" still reads as negative.
-    cleaned = cleaned.replace("$", "").replace(",", "").replace("%", "")
+    # Strip the currency and spacing first, so "€ (1,234)" still reads as
+    # negative and a yen or euro figure is not lost.
+    cleaned = MONEY_PREFIX.sub("", cleaned, count=1)
+    cleaned = cleaned.replace(",", "").replace("%", "")
+    for symbol in ("$", "\u20ac", "\u00a5", "\u00a3"):
+        cleaned = cleaned.replace(symbol, "")
     cleaned = cleaned.replace(" ", "").strip()
     negative = cleaned.startswith("(") and cleaned.endswith(")")
     cleaned = cleaned.strip("()")
@@ -247,11 +265,34 @@ def _collapse(labels: list[str]) -> list[str]:
     return out
 
 
+def _currency_of(text: str) -> Optional[str]:
+    """The reporting currency a report page states in its header cell."""
+    if not text:
+        return None
+    code = CURRENCY_CODE.search(text)
+    if code:
+        return code.group(1)
+    for symbol, currency in CURRENCY_SYMBOL:
+        if symbol in text:
+            return currency
+    return None
+
+
 def _units_of(text: str) -> Optional[str]:
     for pattern, label in UNITS:
         if pattern.search(text):
             return label
     return None
+
+
+def _data_values(cells) -> list[str]:
+    """Drop currency, spacing and footnote-marker cells.
+
+    Dashes are KEPT: a dash holds a column, and dropping it shifts every
+    later number one column to the left.
+    """
+    return [c for c, _, _ in cells[1:]
+            if c not in SPACERS and not FOOTNOTE_MARKER.match(c)]
 
 
 def _data_width(body) -> int:
@@ -260,7 +301,7 @@ def _data_width(body) -> int:
     for cells in body:
         if not cells or not cells[0][0]:
             continue
-        n = len([c for c, _, _ in cells[1:] if c not in SPACERS])
+        n = len(_data_values(cells))
         if n:
             counts[n] = counts.get(n, 0) + 1
     if not counts:
@@ -292,9 +333,12 @@ def _build_column_labels(header_rows, width: int):
     columns fill are spacer columns, and are dropped.
     """
     units = None
+    currency = None
     for row in header_rows:
-        if row and not units:
-            units = _units_of(row[0][0])
+        if not row:
+            continue
+        units = units or _units_of(row[0][0])
+        currency = currency or _currency_of(row[0][0])
 
     tiers = []
     for row in header_rows:
@@ -308,7 +352,7 @@ def _build_column_labels(header_rows, width: int):
             continue
         tiers.append(tier)
     if not tiers:
-        return [], units
+        return [], units, currency
 
     span = max(len(tier) for tier in tiers)
     padded = [tier + [""] * (span - len(tier)) for tier in tiers]
@@ -333,12 +377,7 @@ def _build_column_labels(header_rows, width: int):
                 parts.append(piece)
         if parts:
             composites.append(", ".join(parts))
-    return _collapse(composites), units
-
-
-def _data_values(cells) -> list[str]:
-    """Drop currency and spacing cells but KEEP dashes: they hold a column."""
-    return [c for c, _, _ in cells[1:] if c not in SPACERS]
+    return _collapse(composites), units, currency
 
 
 def _split_header(rows, table_has_th: bool = False):
@@ -350,9 +389,10 @@ def _split_header(rows, table_has_th: bool = False):
             continue
         if header_rows:
             body = rows[index:]
-            labels, units = _build_column_labels(header_rows, _data_width(body))
-            return labels, units, body
-    return [], None, []
+            labels, units, currency = _build_column_labels(
+                header_rows, _data_width(body))
+            return labels, units, currency, body
+    return [], None, None, []
 
 
 def _table_from_node(node: Tag, source_url: str) -> Optional[Table]:
@@ -367,7 +407,7 @@ def _table_from_node(node: Tag, source_url: str) -> Optional[Table]:
         if not rows:
             return None
         table_has_th = any(is_th for row in rows for _, _, is_th in row)
-        column_labels, header_units, body = _split_header(rows, table_has_th)
+        column_labels, header_units, currency, body = _split_header(rows, table_has_th)
         if not column_labels or not body:
             return None
         title = _title_near(node)
@@ -411,6 +451,7 @@ def _table_from_node(node: Tag, source_url: str) -> Optional[Table]:
                             units=units,
                             raw_text=raw,
                             dimension=dimension,
+                            currency=currency,
                         ),
                     )
                 )
@@ -419,6 +460,7 @@ def _table_from_node(node: Tag, source_url: str) -> Optional[Table]:
         return Table(
             title=title,
             units=units,
+            currency=currency,
             column_labels=column_labels,
             facts=facts,
             source_url=source_url,
