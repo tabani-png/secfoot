@@ -163,7 +163,7 @@ cd /Users/tabani/builds/sec-footnote-extractor
 .venv/bin/python -m pytest -q -m "not live"  # offline only
 ```
 
-243 tests, 79 of them live against SEC. Tests are the contract: if you change
+243 tests, 59 of them live against SEC. Tests are the contract: if you change
 extraction behaviour, add a failing test first, pinned to the real filing that
 exposed the problem.
 `tests/s4_guard/test_no_xbrl_anywhere.py` fails the build if any source file
