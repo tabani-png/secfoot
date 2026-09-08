@@ -63,12 +63,30 @@ def answer(ticker_or_cik, topic: str, fetcher, form: str = "10-K",
 
 
 def _from_reports(cik, filing, topic, fetcher):
+    base = edgar.filing_base_url(cik, filing.accession_number)
+    # bytes_read counts the index files too, so the cost of routing is honest.
+    read = 0
+    index_urls = []
     try:
+        summary_url = f"{base}/FilingSummary.xml"
+        read += len(fetcher.get(summary_url))
+        index_urls.append(summary_url)
         reports = edgar.list_reports(cik, filing.accession_number, fetcher=fetcher)
     except Exception:
         return None
     chosen = edgar.reports_for_topic(reports, topic)[:MAX_REPORTS]
-    facts, sections, read, urls = [], [], 0, []
+    if not chosen:
+        # Some filers put a treasury item in a footnote named for something
+        # else, so fall back to matching on the XBRL tags a report anchors.
+        try:
+            meta_url = f"{base}/MetaLinks.json"
+            read += len(fetcher.get(meta_url))
+            index_urls.append(meta_url)
+        except Exception:
+            pass
+        chosen = edgar.reports_by_tag(cik, filing.accession_number, topic,
+                                      fetcher=fetcher)[:MAX_REPORTS]
+    facts, sections, urls = [], [], list(index_urls)
     for report in chosen:
         try:
             html = fetcher.get(report.url)

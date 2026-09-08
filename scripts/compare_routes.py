@@ -55,16 +55,16 @@ def main(tickers):
     for ticker in tickers:
         for route in ("reports", "document"):
             try:
-                counts, read, cash_facts = {}, 0, []
+                counts, cash_facts, fetched = {}, [], set()
                 for topic in TOPICS:
                     a = pipeline.answer(ticker, topic, fetcher, route=route)
                     counts[topic] = len([f for f in a.facts if f.value is not None])
-                    read += a.bytes_read
+                    fetched |= set(a.sources)
                     if topic == "cash_and_equivalents":
                         cash_facts = a.facts
                         cik = a.cik
-                if route == "document":
-                    read = a.bytes_read      # same document reused for all topics
+                # count each file once: answering five topics reuses the index
+                read = sum(len(fetcher.get(u)) for u in fetched)
                 totals[route] += read
                 c = counts
                 print(f"{ticker:7s} {route:9s} {read/1e6:8.2f} {c['cash_and_equivalents']:5d} "

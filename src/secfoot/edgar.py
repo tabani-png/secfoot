@@ -161,3 +161,64 @@ def reports_for_topic(reports: list[Report], topic: str) -> list[Report]:
 
     matched.sort(key=rank)
     return matched
+
+
+# --- finding a report by the XBRL tags it contains -------------------------
+#
+# Some filers disclose a treasury item inside a footnote named for something
+# else. GE reports its supplier finance program under "ACCOUNTS PAYABLE -
+# Narrative (Details)", which no name match can reach. MetaLinks.json ships
+# with every inline-XBRL filing and records the XBRL element anchoring each
+# report, so the report can be found by tag instead.
+
+TAG_HINTS = {
+    "cash_and_equivalents": ("CashAndCashEquivalents", "CashCashEquivalents",
+                             "RestrictedCash"),
+    "foreign_currency": ("ForeignCurrency", "ForeignExchange",
+                         "NotionalAmountOfForeignCurrency"),
+    "derivatives": ("Derivative", "Hedg", "NotionalAmount"),
+    "supply_chain_finance": ("SupplierFinanceProgram", "SupplyChainFinanc",
+                             "ReverseFactoring"),
+    "pensions": ("DefinedBenefitPlan", "PensionAndOtherPostretirement",
+                 "PensionPlan", "PostretirementBenefit"),
+}
+ANCHOR_KEYS = ("firstAnchor", "uniqueAnchor")
+
+
+def parse_metalinks(text: str, base_url: str, topic: str) -> list[Report]:
+    if topic not in TAG_HINTS:
+        raise KeyError(f"unknown topic {topic!r}; known topics: {sorted(TAG_HINTS)}")
+    hints = TAG_HINTS[topic]
+    try:
+        instances = json.loads(text)["instance"]
+    except Exception:
+        return []
+
+    matched: dict[str, Report] = {}
+    for instance in instances.values():
+        for report_id, report in (instance.get("report") or {}).items():
+            if not report_id.startswith("R"):
+                continue
+            names = []
+            for key in ANCHOR_KEYS:
+                anchor = report.get(key) or {}
+                if isinstance(anchor, dict) and anchor.get("name"):
+                    names.append(anchor["name"])
+            if not any(h.lower() in n.lower() for n in names for h in hints):
+                continue
+            short_name = (report.get("shortName") or report_id).strip()
+            file_name = f"{report_id}.htm"
+            matched.setdefault(report_id, Report(
+                short_name, file_name, f"{base_url.rstrip('/')}/{file_name}"))
+    return list(matched.values())
+
+
+def reports_by_tag(cik, accession_number: str, topic: str, fetcher=None) -> list[Report]:
+    if fetcher is None:
+        raise ValueError("a Fetcher is required")
+    base = filing_base_url(cik, accession_number)
+    try:
+        text = fetcher.get(f"{base}/MetaLinks.json")
+    except Exception:
+        return []
+    return parse_metalinks(text, base, topic)
