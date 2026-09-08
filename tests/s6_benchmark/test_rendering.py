@@ -90,3 +90,54 @@ def test_a_mixed_currency_table_warns_that_figures_are_not_comparable():
 def test_a_single_currency_table_states_that_currency_plainly():
     only_usd = {"HPQ": _mixed()["HPQ"]}
     assert "USD millions" in benchmark.render_markdown(only_usd)
+
+
+def _no_currency():
+    return {"CAT": [Row(
+        metric="supplier_finance_obligation",
+        label=benchmark.METRICS["supplier_finance_obligation"].label,
+        value=936.0, units="millions", period="2025", prior_value=830.0,
+        prior_period="2024", row_label="Confirmed obligations outstanding, end of period",
+        table_title="Supplier Finance Programs",
+        source_url="https://www.sec.gov/x/R28.htm", status="found", flags=[],
+        currency=None)],
+        "HPQ": [Row(
+        metric="cash_and_equivalents", label="Cash and cash equivalents",
+        value=3705.0, units="millions", period="2025", prior_value=None,
+        prior_period=None, row_label="Cash and cash equivalents",
+        table_title="Balance Sheets", source_url="https://www.sec.gov/x/R5.htm",
+        status="found", flags=[], currency="USD")]}
+
+
+def test_a_figure_with_no_stated_currency_is_flagged_not_assumed():
+    rows = benchmark.run_checks(_no_currency())
+    cat = rows["CAT"][0]
+    assert any("currency not stated" in f for f in cat.flags)
+    assert cat.value == 936.0, "the figure is still reported"
+
+
+def test_a_figure_with_a_stated_currency_is_not_flagged():
+    rows = benchmark.run_checks(_no_currency())
+    assert rows["HPQ"][0].flags == []
+
+
+def test_the_footer_does_not_claim_a_currency_for_a_figure_that_lacks_one():
+    text = benchmark.render_markdown(benchmark.run_checks(_no_currency()))
+    assert "All figures in USD millions." not in text
+    assert "currency" in text.lower()
+
+
+def test_the_warning_legend_does_not_claim_one_meaning_for_every_flag():
+    text = benchmark.render_markdown(benchmark.run_checks(_no_currency()))
+    assert "marks a year-on-year move over 10x: check it" not in text
+
+
+def test_each_flagged_number_has_its_reason_written_out():
+    text = benchmark.render_markdown(benchmark.run_checks(_no_currency()))
+    assert "currency not stated in the filing" in text
+
+
+def test_the_reason_is_attached_to_the_company_it_belongs_to():
+    text = benchmark.render_markdown(benchmark.run_checks(_no_currency()))
+    cat_section = text.split("**CAT**")[1].split("**HPQ**")[0]
+    assert "currency not stated" in cat_section

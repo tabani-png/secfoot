@@ -245,3 +245,53 @@ def test_an_undimensioned_figure_is_the_total_and_wins():
 
 def test_the_chosen_total_records_that_it_covers_all_plans():
     assert benchmark.pick(WITH_TOTAL, "pension_service_cost").dimension is None
+
+
+ROLLFORWARD = [
+    fact(830.0, "Confirmed obligations outstanding, beginning of period", "2025", "Supplier Finance"),
+    fact(5669.0, "Invoices confirmed during the period", "2025", "Supplier Finance"),
+    fact(-5563.0, "Confirmed invoices paid during the period", "2025", "Supplier Finance"),
+    fact(936.0, "Confirmed obligations outstanding, end of period", "2025", "Supplier Finance"),
+]
+
+
+def test_a_rollforward_that_balances_adds_no_flag():
+    row = benchmark.pick(ROLLFORWARD, "supplier_finance_obligation", all_facts=ROLLFORWARD)
+    assert row.value == 936.0
+    assert row.flags == []
+
+
+def test_a_rollforward_that_does_not_balance_is_flagged_on_the_number():
+    broken = ROLLFORWARD[:-1] + [
+        fact(9999.0, "Confirmed obligations outstanding, end of period", "2025", "Supplier Finance")]
+    row = benchmark.pick(broken, "supplier_finance_obligation", all_facts=broken)
+    assert row.value == 9999.0, "the filing's own figure is still reported"
+    assert any("does not balance" in f for f in row.flags)
+
+
+def test_the_check_only_looks_at_the_table_the_number_came_from():
+    noise = ROLLFORWARD + [
+        fact(3690.0, "Cash and cash equivalents", "2025", "Consolidated Balance Sheets")]
+    row = benchmark.pick(noise, "supplier_finance_obligation", all_facts=noise)
+    assert row.flags == []
+
+
+def test_a_metric_from_a_table_that_is_not_a_rollforward_is_never_flagged():
+    row = benchmark.pick(FACTS, "cash_and_equivalents", all_facts=FACTS)
+    assert row.flags == []
+
+
+def test_an_unknown_metric_name_gives_a_clear_message_not_a_traceback():
+    import secfoot.benchmark_cli as cli
+    with pytest.raises(SystemExit):
+        cli.main(["--tickers", "CAT", "--metrics", "invoices_confirmed",
+                  "--user-agent", "Test test@example.com"])
+
+
+def test_the_error_names_the_metrics_that_do_exist(capsys):
+    import secfoot.benchmark_cli as cli
+    with pytest.raises(SystemExit):
+        cli.main(["--tickers", "CAT", "--metrics", "invoices_confirmed",
+                  "--user-agent", "Test test@example.com"])
+    message = capsys.readouterr().err + capsys.readouterr().out
+    assert "supplier_finance_confirmed" in message

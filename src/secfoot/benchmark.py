@@ -99,7 +99,7 @@ def _missing(metric_name: str) -> Row:
                table_title=None, source_url=None, status=NOT_FOUND)
 
 
-def pick(facts: list[Fact], metric_name: str) -> Row:
+def pick(facts: list[Fact], metric_name: str, all_facts=None) -> Row:
     """The one number for this metric, with its prior period and its source."""
     if metric_name not in METRICS:
         raise KeyError(f"unknown metric {metric_name!r}; known: {sorted(METRICS)}")
@@ -175,6 +175,14 @@ def pick(facts: list[Fact], metric_name: str) -> Row:
     flags = []
     if not validate.validate_comparative(value, prior_value):
         flags.append("implausible move")
+    # If the number sits in a rollforward, check that the rollforward adds up.
+    # A mismatch is reported beside the filing's own figure, never corrected.
+    same_table = [f for f in (all_facts or facts)
+                  if f.provenance.table_title == current.provenance.table_title
+                  and f.provenance.source_url == current.provenance.source_url]
+    problem = validate.check_rollforward(same_table, current.provenance.period)
+    if problem:
+        flags.append(problem)
 
     return Row(
         metric=metric_name, label=metric.label, value=value, units="millions",
@@ -195,6 +203,15 @@ def _money(value: float, currency: Optional[str]) -> str:
     if not prefix and currency:
         return f"{value:,.0f} {currency}"
     return f"{prefix}{value:,.0f}"
+
+
+def run_checks(by_company: dict[str, list[Row]]) -> dict[str, list[Row]]:
+    """Flags that need the whole table, applied once every row is picked."""
+    for rows in by_company.values():
+        for row in rows:
+            if row.status == "found" and not row.currency:
+                row.flags = row.flags + ["currency not stated in the filing"]
+    return by_company
 
 
 def _cell(row: Row) -> str:
@@ -229,8 +246,13 @@ def render_markdown(by_company: dict[str, list[Row]]) -> str:
 
     currencies = sorted({r.currency for rows in by_company.values()
                          for r in rows if r.currency})
-    if len(currencies) == 1:
+    unstated = any(r.status == "found" and not r.currency
+                   for rows in by_company.values() for r in rows)
+    if len(currencies) == 1 and not unstated:
         money_note = f"All figures in {currencies[0]} millions."
+    elif len(currencies) == 1:
+        money_note = (f"Figures in millions, {currencies[0]} where stated; some "
+                      f"figures carry no currency in the filing and are flagged.")
     elif currencies:
         money_note = ("Figures are in each filer's own reporting currency ("
                       + ", ".join(currencies)
@@ -240,7 +262,8 @@ def render_markdown(by_company: dict[str, list[Row]]) -> str:
         money_note = "Figures in millions; the filings did not state a currency."
 
     lines += ["", money_note + " Current year, prior year in brackets.",
-              "⚠ on a number marks a year-on-year move over 10x: check it before using it.",
+              "⚠ marks a number a check flagged; the reason is written out "
+              "under Sources.",
               "\"ambiguous\" means the filing splits that line across plans or segments "
               "with no total; the columns are listed under Sources.", "",
               "## Sources", ""]
@@ -257,6 +280,8 @@ def render_markdown(by_company: dict[str, list[Row]]) -> str:
                 continue
             lines.append(f"- {row.label}: \"{row.row_label}\" in *{row.table_title}* "
                          f"- {row.source_url}")
+            for flag in row.flags:
+                lines.append(f"    - \u26a0 {flag}")
         lines.append("")
     return "\n".join(lines)
 
@@ -279,6 +304,7 @@ def run(tickers, fetcher, form: str = "10-K", route: str = "auto",
                         ticker, topic, fetcher, form=form, route=route).facts
                 except Exception:
                     by_topic[topic] = []
-            rows.append(pick(by_topic[topic], metric_name))
+            rows.append(pick(by_topic[topic], metric_name,
+                             all_facts=by_topic[topic]))
         out[ticker] = rows
-    return out
+    return run_checks(out)

@@ -132,19 +132,28 @@ be aligned to the columns is skipped and counted, never guessed.
 
 ## Guardrails — keep these few and non-conflicting
 
-Too many overlapping gates cause validation loops. Two run automatically:
+Too many overlapping gates cause validation loops. There are four, all
+automatic, and all of them flag rather than withhold — except the first:
 
 1. **Not found beats a guess.** `status == "not found"` means report nothing.
    Do not substitute an XBRL value, a prior year, or a peer company.
    `ambiguous` means the same: withhold the number, show the split.
-2. **Comparatives must be plausible.** `validate.validate_comparative(current,
-   prior)` runs on every benchmark row and flags a move over 10x with `⚠`.
-   Flag it; do not drop it.
+2. **Comparatives must be plausible.** A year-on-year move over 10x is flagged.
+3. **A rollforward must add up.** `validate.check_rollforward` finds the
+   opening and closing rows in the table the number came from, sums every
+   movement between them, and flags a mismatch showing the arithmetic:
+   `830 + 5,669 - 5,563 = 936, but the filing states 9,999`. The filing's own
+   figure is still reported. It returns nothing when the table is not a
+   rollforward or when a component could not be read, so it does not fire
+   spuriously. Verified silent across HPQ, CAT, KO, PG, WMT, PFE, BA and IBM.
+4. **A number must state its currency.** A figure whose page names no currency
+   is flagged rather than assumed to be dollars.
 
-A third gate exists but is **not automatic**:
-`validate.validate_subtotal(components, total)` raises `SubtotalMismatch`. Call
-it by hand when checking a rollforward, e.g. Caterpillar's supplier finance:
-830 + 5,669 - 5,563 = 936.
+A `⚠` on a cell means one of 2-4 fired. The reason is written out in full under
+Sources; the legend never says which, because it varies.
+
+`validate.validate_subtotal(components, total)` is still available for a check
+you construct by hand.
 
 If a gate fails, **stop and report the failure with its provenance.** Do not
 retry with a different prompt. Retrying is what causes the loop.
@@ -163,7 +172,7 @@ cd /Users/tabani/builds/sec-footnote-extractor
 .venv/bin/python -m pytest -q -m "not live"  # offline only
 ```
 
-243 tests, 59 of them live against SEC. Tests are the contract: if you change
+264 tests, 59 of them live against SEC. Tests are the contract: if you change
 extraction behaviour, add a failing test first, pinned to the real filing that
 exposed the problem.
 `tests/s4_guard/test_no_xbrl_anywhere.py` fails the build if any source file
