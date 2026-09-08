@@ -42,13 +42,21 @@ Flags: `--ticker` or `--cik`, `--topic`, `--form` (default `10-K`),
 FilingSummary.xml and fetches only the two or three small pre-rendered reports
 that answer the topic. `--route document` downloads the whole filed document.
 
-Measured over 13 large filers: 8.4 MB read via reports versus 49.6 MB via the
-document, with 13/13 cash figures agreeing with XBRL. The document route got
-IBM wrong (its balance sheet is not in the primary document at all) and
-Caterpillar wrong (a ragged header shifted every segment label).
+Measured over 13 large filers, answering all five topics and counting each file
+once: **15.4 MB read via reports versus 49.6 MB via the document**, with 13/13
+cash figures agreeing with XBRL. That figure includes `FilingSummary.xml` and,
+on the fallback path, `MetaLinks.json`. The document route got IBM wrong (its
+balance sheet is not in the primary document at all) and Caterpillar wrong (a
+ragged header shifted every segment label).
 
 A report's ShortName IS the footnote's name, so provenance never depends on
 guessing which heading sat above a table.
+
+When no report name matches the topic, `edgar.reports_by_tag` reads
+`MetaLinks.json` and finds the report by the XBRL element it anchors. GE files
+its supplier finance program under "ACCOUNTS PAYABLE - Narrative (Details)",
+which no name match can reach. `MetaLinks.json` is 1-3 MB, so this runs only
+when name matching finds nothing.
 
 Do NOT put a headless browser (Cloudflare, Playwright) in front of this. SEC
 filings are static HTML with no JavaScript; a browser adds cost and latency for
@@ -56,6 +64,15 @@ no gain. Use a browser only to spot-check results by eye.
 
 Topics: `cash_and_equivalents`, `foreign_currency`, `derivatives`,
 `supply_chain_finance`, `pensions`.
+
+### Foreign filers
+
+`--form 20-F` works. Verified against TM, UL, SAP, NVS and SHEL. IFRS wording
+is handled ("Current service cost", "Present value of the DBO").
+
+**A foreign filer does not report in dollars.** Every figure carries its
+currency, and a table mixing currencies says its figures are not comparable.
+The tool never converts; do not convert on its behalf without saying so.
 
 Output is JSON: company, cik, form, report_date, filing_date, source_url,
 topic, status, sections, facts. Every fact carries a `provenance` block.
@@ -74,12 +91,12 @@ report URL, table name and row label. `--format json` for the raw rows.
 
 Three outcomes per cell, and only three:
 
-- a number, with the prior year in brackets
+- a number, in its own currency, with the prior year in brackets
 - `not found` - the filing does not disclose it. Never substitute anything.
 - `ambiguous` - the filing splits that line across plans or segments with no
-  total. The value is withheld and every column is listed under Sources.
-  Reporting one plan's number as the company's figure is the failure this
-  prevents.
+  total. The value is withheld and every plan is listed with its number under
+  Sources. Reporting one plan's number as the company's figure is the failure
+  this prevents, and it is the failure that keeps recurring.
 
 A `⚠` on a number means the year-on-year move exceeds 10x. Check it.
 
@@ -102,21 +119,32 @@ A `⚠` on a number means the year-on-year move exceeds 10x. Check it.
 Every number carries all of these, or it is not reported:
 
 `source_url` · `anchor` · `table_title` · `row_label` · `column_label` ·
-`period` · `units` · `raw_text`
+`period` · `units` · `raw_text` · `dimension` · `currency`
+
+`dimension` is the plan or segment the number belongs to, read from the marker
+rows a report page uses (`<tr class="rh">`). `dimension is None` means the
+figure is undimensioned, i.e. the company total; only such a figure may stand
+for a metric.
 
 A table whose columns are not reporting periods is discarded — that is what
-stops a table of contents being read as pension data.
+stops a table of contents being read as pension data. A row whose values cannot
+be aligned to the columns is skipped and counted, never guessed.
 
 ## Guardrails — keep these few and non-conflicting
 
-Too many overlapping gates cause validation loops. There are exactly three:
+Too many overlapping gates cause validation loops. Two run automatically:
 
 1. **Not found beats a guess.** `status == "not found"` means report nothing.
    Do not substitute an XBRL value, a prior year, or a peer company.
-2. **Subtotals must add.** `validate.validate_subtotal(components, total)`
-   raises `SubtotalMismatch`. A mismatch is reported, not silently corrected.
-3. **Comparatives must be plausible.** `validate.validate_comparative(current, prior)`
-   returns False on a move over 10x. Flag it; do not drop it.
+   `ambiguous` means the same: withhold the number, show the split.
+2. **Comparatives must be plausible.** `validate.validate_comparative(current,
+   prior)` runs on every benchmark row and flags a move over 10x with `⚠`.
+   Flag it; do not drop it.
+
+A third gate exists but is **not automatic**:
+`validate.validate_subtotal(components, total)` raises `SubtotalMismatch`. Call
+it by hand when checking a rollforward, e.g. Caterpillar's supplier finance:
+830 + 5,669 - 5,563 = 936.
 
 If a gate fails, **stop and report the failure with its provenance.** Do not
 retry with a different prompt. Retrying is what causes the loop.
@@ -135,6 +163,15 @@ cd /Users/tabani/builds/sec-footnote-extractor
 .venv/bin/python -m pytest -q -m "not live"  # offline only
 ```
 
-Tests are the contract. If you change extraction behaviour, add a failing test
-first. `tests/s4_guard/test_no_xbrl_anywhere.py` fails the build if any source
-file reaches for an XBRL aggregation endpoint.
+243 tests, 79 of them live against SEC. Tests are the contract: if you change
+extraction behaviour, add a failing test first, pinned to the real filing that
+exposed the problem.
+`tests/s4_guard/test_no_xbrl_anywhere.py` fails the build if any source file
+reaches for an XBRL aggregation endpoint.
+
+`KNOWN-GAPS.md` in the repo lists what is verified and what is still open. Read
+it before promising coverage.
+
+**Every bug found so far has been the same shape: a label getting lost, so a
+right number lands under a wrong heading — segment, plan, year, currency. Never
+the arithmetic.** Suspect labels first.
