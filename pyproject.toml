@@ -1,0 +1,18 @@
+[project]
+name = "secfoot"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["requests", "beautifulsoup4", "lxml"]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore::bs4.XMLParsedAsHTMLWarning"]
+markers = ["live: hits data.sec.gov / www.sec.gov over the network"]
