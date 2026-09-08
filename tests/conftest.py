@@ -1,13 +1,21 @@
+import os
 import pathlib
 import pytest
 
-USER_AGENT = "Jeanmartin research muhammad.a@jeanmartin.com"
+# SEC requires a descriptive User-Agent carrying a contact address. Set your
+# own before running the live tests:
+#   export SEC_USER_AGENT="Your Name, Your Company you@example.com"
+USER_AGENT = os.environ.get("SEC_USER_AGENT", "").strip() or \
+    "Example Research example@example.com"
 HP_CIK = "0000047217"
 CACHE = pathlib.Path(__file__).resolve().parents[1] / ".cache"
 
 
 @pytest.fixture(scope="session")
 def fetcher():
+    if not os.environ.get("SEC_USER_AGENT", "").strip():
+        pytest.skip('set SEC_USER_AGENT="Your Name, Your Company you@example.com" '
+                    "to run the tests that call SEC")
     from secfoot.http import Fetcher
     return Fetcher(cache_dir=CACHE, user_agent=USER_AGENT)
 

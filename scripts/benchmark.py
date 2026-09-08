@@ -6,6 +6,7 @@ reliably, so it works as an independent ground truth for the parser.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import sys
 
@@ -14,7 +15,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 from secfoot import edgar, extract           # noqa: E402
 from secfoot.http import Fetcher             # noqa: E402
 
-UA = "Jeanmartin research muhammad.a@jeanmartin.com"
+UA = os.environ.get("SEC_USER_AGENT", "").strip()
+if not UA:
+    raise SystemExit('Set SEC_USER_AGENT="Your Name, Your Company you@example.com" '
+                     "first: SEC requires a contact address on every request.")
 CACHE = pathlib.Path(__file__).resolve().parents[1] / ".cache"
 TOPICS = ["cash_and_equivalents", "foreign_currency", "derivatives",
           "supply_chain_finance", "pensions"]

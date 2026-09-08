@@ -1,10 +1,14 @@
 """Reports route vs whole-document route: coverage and bytes read."""
-import json, pathlib, sys
+import json
+import os, pathlib, sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 from secfoot import edgar, pipeline
 from secfoot.http import Fetcher
 
-UA = "Jeanmartin research muhammad.a@jeanmartin.com"
+UA = os.environ.get("SEC_USER_AGENT", "").strip()
+if not UA:
+    raise SystemExit('Set SEC_USER_AGENT="Your Name, Your Company you@example.com" '
+                     "first: SEC requires a contact address on every request.")
 CACHE = pathlib.Path(__file__).resolve().parents[1] / ".cache"
 TOPICS = ["cash_and_equivalents", "foreign_currency", "derivatives",
           "supply_chain_finance", "pensions"]

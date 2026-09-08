@@ -22,15 +22,15 @@ document to download. The numbers always come from the filed document.
 
 ## Tool
 
-`/Users/tabani/builds/sec-footnote-extractor` — installed package `secfoot`.
+`__SECFOOT_HOME__` — installed package `secfoot`.
 
 ```bash
-cd /Users/tabani/builds/sec-footnote-extractor
+cd __SECFOOT_HOME__
 .venv/bin/python -m secfoot.cli \
   --ticker HPQ \
   --topic cash_and_equivalents \
   --form 10-K \
-  --user-agent "Jeanmartin research muhammad.a@jeanmartin.com"
+  --user-agent "$SEC_USER_AGENT"
 ```
 
 Flags: `--ticker` or `--cik`, `--topic`, `--form` (default `10-K`),
@@ -80,10 +80,10 @@ topic, status, sections, facts. Every fact carries a `provenance` block.
 ## The deliverable: a benchmark table
 
 ```bash
-cd /Users/tabani/builds/sec-footnote-extractor
+cd __SECFOOT_HOME__
 .venv/bin/python -m secfoot.benchmark_cli \
   --tickers HPQ,CAT,BA,PG,KO \
-  --user-agent "Jeanmartin research muhammad.a@jeanmartin.com"
+  --user-agent "$SEC_USER_AGENT"
 ```
 
 One row per metric, one column per company, every number footnoted to its
@@ -167,7 +167,7 @@ complete-looking one.
 ## Tests
 
 ```bash
-cd /Users/tabani/builds/sec-footnote-extractor
+cd __SECFOOT_HOME__
 .venv/bin/python -m pytest -q              # all, includes live SEC calls
 .venv/bin/python -m pytest -q -m "not live"  # offline only
 ```
