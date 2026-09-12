@@ -24,6 +24,8 @@ This tool reads the filing instead.
 Needs Python 3.11 or newer. Nothing else.
 
 ```bash
+git clone https://github.com/tabani-png/secfoot.git
+cd secfoot
 ./install.sh
 ```
 
