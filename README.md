@@ -136,3 +136,7 @@ not. Do not promise coverage beyond it.
 
 Briefly: 13 US filers and 5 foreign filers verified, every cash figure agreeing
 with the filing. 10-Q is untested.
+
+---
+
+Built by [consultance.ai](https://consultance.ai), which builds AI systems for finance teams. See the [SEC filings reader](https://consultance.ai/library/sec-filings-reader) for a ready-to-use version.
